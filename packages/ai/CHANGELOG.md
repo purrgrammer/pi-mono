@@ -5,6 +5,7 @@
 ### Added
 
 - Added `AssistantMessage.responseModel` on the openai-completions path: surfaces the concrete `chunk.model` when it differs from the requested id (e.g. OpenRouter `auto` -> `anthropic/...`).
+- Added `Usage.reportedCost` and `compat.requestUsageInclude` on the openai-completions path so consumers can read the proxy-billed cost on routed/virtual ids. The static cost table doesn't apply there (e.g. `openrouter/auto` returns `cost.total: 0`). Auto-on for OpenRouter, opt-in for compatible proxies.
 
 ### Fixed
 

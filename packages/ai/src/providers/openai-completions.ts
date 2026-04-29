@@ -74,6 +74,10 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 	return block.type === "image";
 }
 
+function finiteNumber(n: unknown): number | undefined {
+	return typeof n === "number" && Number.isFinite(n) ? n : undefined;
+}
+
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -560,6 +564,13 @@ function buildParams(
 		(params as any).provider = model.compat.openRouterRouting;
 	}
 
+	// Distinct from `supportsUsageInStreaming` (OpenAI-standard
+	// `stream_options.include_usage` for token counts). This is the
+	// OpenRouter-style `usage: { include: true }` for cost reporting.
+	if (compat.requestUsageInclude) {
+		(params as any).usage = { include: true };
+	}
+
 	// Vercel AI Gateway provider routing preferences
 	if (model.baseUrl.includes("ai-gateway.vercel.sh") && model.compat?.vercelGatewayRouting) {
 		const routing = model.compat.vercelGatewayRouting;
@@ -961,6 +972,11 @@ function parseChunkUsage(
 		completion_tokens?: number;
 		prompt_cache_hit_tokens?: number;
 		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+		cost?: number;
+		cost_details?: {
+			upstream_inference_prompt_cost?: number;
+			upstream_inference_completions_cost?: number;
+		};
 	},
 	model: Model<"openai-completions">,
 ): AssistantMessage["usage"] {
@@ -988,6 +1004,18 @@ function parseChunkUsage(
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 	calculateCost(model, usage);
+	const billedCost = finiteNumber(rawUsage.cost);
+	const inCost = finiteNumber(rawUsage.cost_details?.upstream_inference_prompt_cost);
+	const outCost = finiteNumber(rawUsage.cost_details?.upstream_inference_completions_cost);
+	const componentsSum = inCost !== undefined || outCost !== undefined ? (inCost ?? 0) + (outCost ?? 0) : undefined;
+	const total = billedCost !== undefined && billedCost > 0 ? billedCost : componentsSum;
+	if (total !== undefined && total > 0) {
+		usage.reportedCost = {
+			total,
+			...(inCost !== undefined && { input: inCost }),
+			...(outCost !== undefined && { output: outCost }),
+		};
+	}
 	return usage;
 }
 
@@ -1046,6 +1074,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
 	const isGroq = provider === "groq" || baseUrl.includes("groq.com");
 	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
+	const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
 	const cacheControlFormat = provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
 
 	const reasoningEffortMap = isDeepSeek
@@ -1071,18 +1100,13 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		supportsReasoningEffort: !isGrok && !isZai,
 		reasoningEffortMap,
 		supportsUsageInStreaming: true,
+		requestUsageInclude: isOpenRouter,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: false,
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: false,
 		requiresReasoningContentOnAssistantMessages: isDeepSeek,
-		thinkingFormat: isDeepSeek
-			? "deepseek"
-			: isZai
-				? "zai"
-				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
-					? "openrouter"
-					: "openai",
+		thinkingFormat: isDeepSeek ? "deepseek" : isZai ? "zai" : isOpenRouter ? "openrouter" : "openai",
 		openRouterRouting: {},
 		vercelGatewayRouting: {},
 		zaiToolStream: false,
@@ -1107,6 +1131,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
 		reasoningEffortMap: model.compat.reasoningEffortMap ?? detected.reasoningEffortMap,
 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
+		requestUsageInclude: model.compat.requestUsageInclude ?? detected.requestUsageInclude,
 		maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
 		requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
 		requiresAssistantAfterToolResult:

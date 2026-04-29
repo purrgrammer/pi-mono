@@ -187,6 +187,21 @@ export interface ToolCall {
 	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
 }
 
+/**
+ * USD cost reported by the upstream/proxy. Only set when `total > 0`.
+ * - `total`: billed amount (top-level `cost`); falls back to the components'
+ *   sum when the billed value is missing or reported as `0`.
+ * - `input`/`output`: per-component split from `cost_details` when reported,
+ *   representing the upstream model's cost. May not sum to `total` when the
+ *   proxy adds a margin (e.g. OpenRouter). Use `input + output` for
+ *   upstream-only analytics; use `total` for billing.
+ */
+export interface ReportedCost {
+	total: number;
+	input?: number;
+	output?: number;
+}
+
 export interface Usage {
 	input: number;
 	output: number;
@@ -200,6 +215,7 @@ export interface Usage {
 		cacheWrite: number;
 		total: number;
 	};
+	reportedCost?: ReportedCost; // Cost reported by upstream when `compat.requestUsageInclude` is set. Prefer over `cost` for routed/virtual ids: `reportedCost?.total ?? cost.total`.
 }
 
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
@@ -287,6 +303,8 @@ export interface OpenAICompletionsCompat {
 	reasoningEffortMap?: Partial<Record<ThinkingLevel, string>>;
 	/** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
 	supportsUsageInStreaming?: boolean;
+	/** Send `usage: { include: true }` (OpenRouter-style cost opt-in). Captured into `usage.reportedCost`. Auto-detected `true` for OpenRouter; set on compatible proxies. */
+	requestUsageInclude?: boolean;
 	/** Which field to use for max tokens. Default: auto-detected from URL. */
 	maxTokensField?: "max_completion_tokens" | "max_tokens";
 	/** Whether tool results require the `name` field. Default: auto-detected from URL. */
